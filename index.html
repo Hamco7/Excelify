@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>서류 표 엑셀 변환</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<style>
+:root{--ink:#12232e;--bg:#eef1f0;--line:#c3cdd1;--acc:#0f4c5c;--low:#ffe38a;--card:#fff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Noto Sans KR",sans-serif}
+header{padding:18px 24px 10px}
+h1{margin:0;font-size:22px;font-weight:700}
+header p{margin:2px 0 0;color:#4a5d68;font-size:13px}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 24px 14px}
+.drop{flex:1 1 280px;border:2px dashed var(--acc);border-radius:8px;padding:14px 18px;background:var(--card);cursor:pointer;text-align:center}
+.drop.over{background:#dcebee}
+.drop input{display:none}
+.ctl{display:flex;gap:8px;align-items:center;font-size:13px}
+button{font:inherit;border:1px solid var(--acc);background:var(--card);color:var(--acc);border-radius:6px;padding:7px 14px;cursor:pointer}
+button.primary{background:var(--acc);color:#fff}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,.drop:focus-within{outline:3px solid #f2a900;outline-offset:2px}
+#status{padding:0 24px 8px;font-size:13px;color:#4a5d68;min-height:22px}
+main{display:grid;grid-template-columns:minmax(260px,2fr) 3fr;gap:14px;padding:0 24px 28px}
+.pane{background:var(--card);border:1px solid var(--line);border-radius:8px;min-height:300px;max-height:75vh;overflow:auto;padding:10px}
+.pane img{max-width:100%;display:block}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tabs button{padding:3px 10px;font-size:13px}
+.tabs button.on{background:var(--acc);color:#fff}
+table{border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:14px}
+td{border:1px solid var(--line);padding:3px 8px;min-width:48px;white-space:pre-wrap}
+td.low{background:var(--low)}
+td:focus{outline:2px solid var(--acc)}
+td.x{border:0;padding:0 4px;min-width:0}
+td.x button{border:0;padding:0 5px;color:#a33;background:none}
+.empty{color:#6b7c86;padding:30px 10px;text-align:center}
+.hint{font-size:12px;color:#4a5d68;margin:0 0 8px}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+<h1>서류 표 엑셀 변환</h1>
+<p>이미지나 스캔 PDF를 올리면 표로 만들어 줍니다. 파일은 이 브라우저 안에서만 처리되고 외부로 전송되지 않습니다.</p>
+</header>
+<div class="bar">
+<label class="drop" id="drop"><input type="file" id="file" accept="image/*,application/pdf" multiple>파일을 끌어다 놓거나 여기를 눌러 선택 (JPG, PNG, PDF)</label>
+<div class="ctl"><label for="gap">열 간격</label><input type="range" id="gap" min="0.4" max="3" step="0.1" value="1"><button id="redo" disabled>표 다시 만들기</button></div>
+<button class="primary" id="dl" disabled>엑셀로 저장</button>
+</div>
+<div id="status"></div>
+<main>
+<section class="pane" id="src"><div class="empty">원본 이미지가 여기에 표시됩니다.</div></section>
+<section class="pane" id="out"><div class="empty">인식된 표가 여기에 표시됩니다.</div></section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+let pages = [], cur = 0, baseName = '변환결과';
+const LOW = 75;
+
+async function toCanvases(file) {
+  if (file.type === 'application/pdf') {
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const out = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const p = await pdf.getPage(i), vp = p.getViewport({ scale: 2 });
+      const c = document.createElement('canvas');
+      c.width = vp.width; c.height = vp.height;
+      await p.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      out.push(c);
+    }
+    return out;
+  }
+  const bmp = await createImageBitmap(file);
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  return [c];
+}
+
+function buildTable(words, k) {
+  words = words.filter(w => w.text.trim() && w.confidence > 20);
+  if (!words.length) return [];
+  const hs = words.map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+  const mh = hs[hs.length >> 1];
+  words = words.slice().sort((a, b) => (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1));
+  const rows = [];
+  for (const w of words) {
+    const cy = (w.bbox.y0 + w.bbox.y1) / 2, r = rows[rows.length - 1];
+    if (r && Math.abs(cy - r.cy) < mh * 0.6) {
+      r.w.push(w); r.cy = (r.cy * (r.w.length - 1) + cy) / r.w.length;
+    } else rows.push({ cy, w: [w] });
+  }
+  const iv = words.map(w => [w.bbox.x0, w.bbox.x1]).sort((a, b) => a[0] - b[0]);
+  const cols = [];
+  for (const [a, b] of iv) {
+    const l = cols[cols.length - 1];
+    if (l && a - l[1] < mh * k) l[1] = Math.max(l[1], b); else cols.push([a, b]);
+  }
+  return rows.map(r => {
+    const cells = cols.map(() => ({ t: [], c: 100 }));
+    r.w.sort((a, b) => a.bbox.x0 - b.bbox.x0).forEach(w => {
+      const x = (w.bbox.x0 + w.bbox.x1) / 2;
+      let i = cols.findIndex(c => x <= c[1]);
+      if (i < 0) i = cols.length - 1;
+      cells[i].t.push(w.text); cells[i].c = Math.min(cells[i].c, w.confidence);
+    });
+    return cells.map(c => ({ t: c.t.join(' '), c: c.c }));
+  });
+}
+
+function show() {
+  const p = pages[cur];
+  const tabs = pages.length > 1
+    ? '<div class="tabs">' + pages.map((_, i) => `<button class="${i === cur ? 'on' : ''}" data-p="${i}">${i + 1}페이지</button>`).join('') + '</div>' : '';
+  $('#src').innerHTML = tabs + `<img src="${p.url}" alt="원본 ${cur + 1}페이지">`;
+  if (!p.grid.length) { $('#out').innerHTML = tabs + '<div class="empty">인식된 글자가 없습니다. 더 선명한 이미지로 다시 시도해 보세요.</div>'; return; }
+  const body = p.grid.map((r, ri) =>
+    '<tr><td class="x"><button data-del="' + ri + '" title="이 행 삭제" aria-label="이 행 삭제">×</button></td>' +
+    r.map((c, ci) => `<td contenteditable data-r="${ri}" data-c="${ci}" class="${c.c < LOW ? 'low' : ''}">${c.t.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</td>`).join('') + '</tr>').join('');
+  $('#out').innerHTML = tabs + '<p class="hint">노란 칸은 인식이 불확실한 곳입니다. 원본과 비교해 숫자를 꼭 확인하세요. 칸을 눌러 바로 고칠 수 있습니다.</p><table>' + body + '</table>';
+}
+
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.dataset.p) { cur = +t.dataset.p; show(); }
+  if (t.dataset.del) { pages[cur].grid.splice(+t.dataset.del, 1); show(); }
+});
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset && t.dataset.r) { pages[cur].grid[+t.dataset.r][+t.dataset.c].t = t.textContent; t.classList.remove('low'); }
+});
+
+async function run(files) {
+  $('#dl').disabled = true; $('#redo').disabled = true;
+  pages = []; cur = 0;
+  baseName = files[0].name.replace(/\.[^.]+$/, '');
+  try {
+    $('#status').textContent = '파일을 읽는 중...';
+    let canvases = [];
+    for (const f of files) canvases = canvases.concat(await toCanvases(f));
+    const worker = await Tesseract.createWorker(['kor', 'eng'], 1, {
+      logger: m => { if (m.status) $('#status').textContent = `${pages.length + 1}/${canvases.length}페이지 · ${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; }
+    });
+    for (const c of canvases) {
+      const { data } = await worker.recognize(c);
+      const p = { url: c.toDataURL('image/jpeg', 0.85), words: data.words || [] };
+      p.grid = buildTable(p.words, +$('#gap').value);
+      pages.push(p);
+      if (pages.length === 1) show();
+    }
+    await worker.terminate();
+    $('#status').textContent = `완료: ${pages.length}페이지를 인식했습니다.`;
+    $('#dl').disabled = false; $('#redo').disabled = false;
+    show();
+  } catch (err) {
+    $('#status').textContent = '처리 중 문제가 생겼습니다: ' + err.message + ' (인터넷 연결과 파일 형식을 확인해 주세요.)';
+  }
+}
+
+function val(s) {
+  const t = s.trim();
+  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return +t.replace(/,/g, '');
+  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(t)) return +t;
+  return t;
+}
+
+$('#dl').onclick = () => {
+  const wb = XLSX.utils.book_new();
+  pages.forEach((p, i) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(p.grid.map(r => r.map(c => val(c.t)))), `페이지${i + 1}`));
+  XLSX.writeFile(wb, baseName + '.xlsx');
+};
+$('#redo').onclick = () => {
+  const p = pages[cur];
+  p.grid = buildTable(p.words, +$('#gap').value);
+  show();
+};
+$('#file').onchange = e => { if (e.target.files.length) run([...e.target.files]); };
+const drop = $('#drop');
+['dragover', 'dragenter'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { if (e.dataTransfer.files.length) run([...e.dataTransfer.files]); });
+</script>
+</body>
+</html>
