@@ -38,6 +38,26 @@ td.x button{border:0;padding:0 5px;color:#a33;background:none}
 .empty{color:#6b7c86;padding:30px 10px;text-align:center}
 .hint{font-size:12px;color:#4a5d68;margin:0 0 8px}
 @media(max-width:860px){main{grid-template-columns:1fr}}
+/* 회색 + 파랑 테마 */
+:root{--ink:#1c2733;--bg:#e4e8ed;--line:#c3cad3;--acc:#1f5fbf;--navy:#14365f;--soft:#eef2f8}
+header{background:var(--navy);color:#fff;padding:22px 24px 18px;border-bottom:4px solid var(--acc)}
+h1{font-size:24px;letter-spacing:-.01em}
+header p{color:#b9c8dc;margin-top:4px}
+.bar{padding-top:18px}
+.drop{background:var(--card);border-color:var(--acc);color:var(--navy);font-weight:500}
+.drop:hover{background:var(--soft)}
+.drop.over{background:#d6e4f7}
+button:hover:not(:disabled){background:var(--soft)}
+button.primary:hover:not(:disabled){background:#174d9c}
+select{border-color:#9aa8ba}
+#status,.hint{color:#52637a}
+.empty{color:#6b7a8c}
+.pane{border-radius:6px}
+#src{background:#f1f3f6}
+#out{border-color:var(--acc)}
+th,td{border-color:var(--line)}
+tr:nth-child(even) td:not(.low):not(.x){background:var(--soft)}
+tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 </style>
 </head>
 <body>
@@ -47,7 +67,7 @@ td.x button{border:0;padding:0 5px;color:#a33;background:none}
 </header>
 <div class="bar">
 <label class="drop" id="drop"><input type="file" id="file" accept="image/*,application/pdf" multiple>파일을 끌어다 놓거나 여기를 눌러 선택 (JPG, PNG, PDF) · 캡처한 이미지는 Ctrl+V로 바로 붙여넣기</label>
-<div class="ctl"><label for="lang">언어</label><select id="lang"><option value="eng+kor">영문+한글</option><option value="eng">영문만 (영문 서류에 더 정확)</option></select></div>
+<div class="ctl"><label for="lang">언어</label><select id="lang"><option value="eng">영문</option><option value="eng+kor">영문+한글</option></select></div>
 <div class="ctl"><label for="mode">표 방식</label><select id="mode"><option value="auto">자동</option><option value="grid">격자 선 기준</option><option value="free">글자 간격 기준</option></select><label for="gap">열 간격</label><input type="range" id="gap" min="0.4" max="3" step="0.1" value="1"><button id="redo" disabled>표 다시 만들기</button></div>
 <button class="primary" id="dl" disabled>엑셀로 저장</button>
 </div>
