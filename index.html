@@ -109,6 +109,7 @@ tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 <div class="opts">
 <div class="opt"><label for="lang2">언어</label><select id="lang2"><option value="eng">영문</option><option value="eng+kor">영문+한글</option></select><p id="lang2Help"></p></div>
 <div class="opt"><label for="clean2">배경 지우기</label><label style="font-weight:400"><input type="checkbox" id="clean2" checked> 켜기</label><p>연한 워터마크 글씨와 빨강·노랑 표시를 지우고 검은 글자만 읽어요. 글자가 연하거나 흐린 서류라면 꺼 보세요.</p></div>
+<div class="opt"><label for="junk">불확실한 줄</label><select id="junk"><option value="drop">지우기</option><option value="mark">⚠ 표시하기</option><option value="keep">그대로 두기</option></select><p id="junkHelp"></p></div>
 <div class="opt"><label>복사</label><button id="copy" disabled>텍스트 복사</button><p>오른쪽 글자 전체를 복사해요. 메모장이나 문서에 붙여넣을 수 있어요.</p></div>
 <div class="opt"><label>저장</label><button class="primary" id="dlTxt" disabled>.txt로 저장</button><p>오른쪽 글자를 텍스트 파일로 내려받아요. 여러 페이지면 페이지 구분선이 들어가요.</p></div>
 </div>
@@ -418,8 +419,50 @@ document.querySelectorAll('.tabbar button').forEach(b => b.onclick = () => {
 });
 
 // ---- 텍스트 추출 ----
-function showHelp2() { $('#lang2Help').textContent = HELP.lang[$('#lang2').value]; }
-$('#lang2').onchange = showHelp2; showHelp2();
+const HELP_JUNK = {
+  drop: '+++++ 같은 구분선은 기호로 되살리고, 그 밖에 엉뚱한 글자 조각으로 읽힌 줄은 빈 줄로 바꿔요.',
+  mark: '구분선은 기호로 되살리고, 엉뚱하게 읽힌 줄은 지우지 않고 앞에 ⚠를 붙여 보여줘요. 직접 확인하고 싶을 때 쓰세요.',
+  keep: '읽힌 그대로 모두 보여줘요. 지우거나 고치는 줄이 없어요.'
+};
+function showHelp2() {
+  $('#lang2Help').textContent = HELP.lang[$('#lang2').value];
+  $('#junkHelp').textContent = HELP_JUNK[$('#junk').value];
+}
+$('#lang2').onchange = $('#junk').onchange = showHelp2; showHelp2();
+
+// 기호만 있는 줄(+++++, ----- 등)은 기호 전용으로 한 번 더 읽어서 되살리기
+async function readSymbols(w, q, bb) {
+  const k = cropCell(q, bb.x0 - 4, bb.y0 - 4, bb.x1 + 4, bb.y1 + 4);
+  await w.setParameters({ tessedit_char_whitelist: '+-=_*#~.|/<>', tessedit_pageseg_mode: '7' });
+  const { data } = await w.recognize(k.c);
+  await w.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: '3' });
+  const t = data.text.replace(/\s+/g, '');
+  return t.length >= 3 && /^[+\-=_*#~.|/<>]+$/.test(t) && data.confidence > 55 ? t : null;
+}
+
+// 줄 단위로 훑어서, 구분선·얼룩이 글자 조각으로 읽힌 줄을 처리하기
+async function textFrom(data, mode, w, q) {
+  if (mode === 'keep' || !data.lines || !data.lines.length) return data.text.trim();
+  const hs = data.lines.map(l => l.bbox.y1 - l.bbox.y0).sort((a, b) => a - b), med = hs[hs.length >> 1] || 1;
+  const out = []; let prev = null;
+  for (const l of data.lines) {
+    const t = l.text.trim();
+    if (!t) continue;
+    const toks = t.split(/\s+/), short = toks.filter(x => x.replace(/[^A-Za-z0-9가-힣]/g, '').length <= 2).length;
+    const h = l.bbox.y1 - l.bbox.y0;
+    const bad = l.confidence < 60 || (toks.length >= 4 && short / toks.length >= 0.7);
+    const flat = h < med * 0.65 && short / toks.length >= 0.5;
+    if (prev && l.bbox.y0 - prev.bbox.y1 > med * 0.9 && out[out.length - 1] !== '') out.push('');
+    prev = l;
+    if (bad || flat) {
+      const sym = await readSymbols(w, q, l.bbox);
+      if (sym) out.push(sym);
+      else if (mode === 'mark') out.push('⚠ ' + t);
+      else if (out[out.length - 1] !== '') out.push('');
+    } else out.push(t);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 async function runText(files) {
   if (busy) return;
@@ -438,8 +481,9 @@ async function runText(files) {
     await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1', user_defined_dpi: '300' });
     const out = [];
     for (const c of cs) {
-      const { data } = await worker.recognize(prep(c, $('#clean2').checked));
-      out.push(data.text.trim()); n++;
+      const q = prep(c, $('#clean2').checked);
+      const { data } = await worker.recognize(q);
+      out.push(await textFrom(data, $('#junk').value, worker, q)); n++;
     }
     await worker.terminate();
     $('#txt').value = out.map((t, i) => cs.length > 1 ? `--- ${i + 1}페이지 ---\n${t}` : t).join('\n\n');
