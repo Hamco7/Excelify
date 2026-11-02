@@ -209,30 +209,47 @@ function prep(src, clean) {
   return c;
 }
 
-// 표의 가로/세로 선 위치 찾기
-function group(arr) {
-  const o = []; let p = null;
-  for (const v of arr) { if (p !== null && v - p <= 6) o[o.length - 1][1] = v; else o.push([v, v]); p = v; }
-  return o.map(e => (e[0] + e[1]) / 2);
+// 표의 가로/세로 선 찾기 (원본 크기 기준, 가는 회색 선·아이콘에 가려진 선도 감지)
+function group(arr, tol) {
+  const o = [];
+  for (const v of arr) { const l = o[o.length - 1]; if (l && v - l[l.length - 1] <= tol) l.push(v); else o.push([v]); }
+  return o.map(g => g.reduce((a, b) => a + b, 0) / g.length);
 }
-function findLines(c) {
-  const W = c.width, H = c.height, d = c.getContext('2d').getImageData(0, 0, W, H).data;
-  const hy = [], vx = [];
-  for (let y = 0; y < H; y++) {
-    let run = 0, gap = 0, best = 0;
-    for (let x = 0; x < W; x++) {
-      if (d[(y * W + x) * 4] < 110) { run += 1 + gap; gap = 0; if (run > best) best = run; }
-      else if (++gap > 3) { run = 0; gap = 0; }
-    }
-    if (best > W * 0.15) hy.push(y);
+function longest(get, n, tol) {
+  let best = 0, run = 0, gap = 0;
+  for (let i = 0; i < n; i++) {
+    if (get(i)) { run += 1 + gap; gap = 0; if (run > best) best = run; }
+    else if (++gap > tol) { run = 0; gap = 0; }
   }
-  const run = new Int32Array(W), gap = new Int32Array(W), best = new Int32Array(W);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (d[(y * W + x) * 4] < 110) { run[x] += 1 + gap[x]; gap[x] = 0; if (run[x] > best[x]) best[x] = run[x]; }
-    else if (++gap[x] > 3) { run[x] = 0; gap[x] = 0; }
-  }
-  for (let x = 0; x < W; x++) if (best[x] > H * 0.05) vx.push(x);
-  return { hs: group(hy), vs: group(vx) };
+  return best;
+}
+function findLines(src) {
+  const W = src.width, H = src.height, d = src.getContext('2d').getImageData(0, 0, W, H).data;
+  const dark = new Uint8Array(W * H);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) dark[j] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 < 165 ? 1 : 0;
+  const hy = [];
+  for (let y = 0; y < H; y++) if (longest(x => dark[y * W + x], W, 2) >= W * 0.4) hy.push(y);
+  const hs = group(hy, 4), bands = [];
+  for (let i = 0; i < hs.length - 1; i++) if (hs[i + 1] - hs[i] >= 20) bands.push([hs[i], hs[i + 1]]);
+  const sat = bands.map(() => new Uint8Array(W)), cnt = new Int32Array(W);
+  bands.forEach(([a, b], bi) => {
+    const y0 = Math.floor(a) + 3, n = Math.floor(b) - 3 - y0;
+    if (n < 8) return;
+    for (let x = 0; x < W; x++) if (longest(i => dark[(y0 + i) * W + x], n, 2) >= 0.35 * (b - a)) { sat[bi][x] = 1; cnt[x]++; }
+  });
+  const acc = [];
+  for (let x = 0; x < W; x++) if (bands.length && cnt[x] / bands.length >= 0.5) acc.push(x);
+  return { hs, vs: group(acc, 4), bands, sat };
+}
+// 한 줄(띠) 안에서 실제로 이어져 있는 세로선만 골라내기
+function localCols(L, bi) {
+  const out = [];
+  L.vs.forEach((x, k) => {
+    let ok = k === 0 || k === L.vs.length - 1;
+    for (let i = Math.max(0, Math.round(x) - 2); !ok && i <= Math.round(x) + 2 && i < L.sat[bi].length; i++) if (L.sat[bi][i]) ok = true;
+    if (ok) out.push([k, x]);
+  });
+  return out;
 }
 
 // ---- OCR 엔진(재사용) ----
@@ -245,7 +262,7 @@ async function getWorker(lang) {
   W = { lang, w };
   return w;
 }
-const okWord = w => w.text.trim() && w.confidence > 20 && !/^[|_\-—=~.¦]+$/.test(w.text.trim());
+const okWord = w => w.text.trim() && w.confidence > 20 && /[A-Za-z0-9가-힣]/.test(w.text);
 
 function cropCell(q, x0, y0, x1, y1) {
   const w = Math.max(1, Math.round(x1 - x0)), h = Math.max(1, Math.round(y1 - y0));
@@ -258,11 +275,53 @@ function cropCell(q, x0, y0, x1, y1) {
   return { c, ink: ink / (w * h) };
 }
 
+// 칸 안의 글자들을 위치 기준으로 다시 열로 나누기 (선이 없는 열 경계 보완)
+function buildRows(cells, nK) {
+  const hs = cells.flatMap(r => r.flatMap(c => c.ws.map(w => w.h))).sort((a, b) => a - b), mh = hs[hs.length >> 1] || 20;
+  const sub = [];
+  for (let k = 0; k < nK; k++) {
+    const iv = [];
+    cells.forEach((r, bi) => r.forEach(c => { if (c.k === k) c.ws.forEach(w => iv.push([w.px0, w.px1, bi])); }));
+    iv.sort((a, b) => a[0] - b[0]);
+    let segs = [];
+    for (const [a, b, bi] of iv) {
+      const l = segs[segs.length - 1];
+      if (l && a - l.e < mh * 1.2) { l.e = Math.max(l.e, b); l.b.add(bi); } else segs.push({ s: a, e: b, b: new Set([bi]) });
+    }
+    const mx = Math.max(0, ...segs.map(g => g.b.size));
+    for (;;) {  // 몇 줄에만 나타나는 조각은 이웃에 합치기
+      const i = segs.findIndex(g => g.b.size < mx * 0.25);
+      if (i < 0 || segs.length < 2) break;
+      const j = i === 0 ? 1 : i === segs.length - 1 ? i - 1 : (segs[i].s - segs[i - 1].e < segs[i + 1].s - segs[i].e ? i - 1 : i + 1);
+      const A = segs[Math.min(i, j)], B = segs[Math.max(i, j)];
+      A.e = Math.max(A.e, B.e); B.b.forEach(v => A.b.add(v));
+      segs.splice(Math.max(i, j), 1);
+    }
+    sub.push(segs.slice(0, -1).map((g, i) => (g.e + segs[i + 1].s) / 2));
+  }
+  const idx = [], cols = [];
+  sub.forEach((bk, k) => { idx[k] = cols.length; for (let j = 0; j <= bk.length; j++) cols.push([k, j]); });
+  return cells.map(r => {
+    const row = cols.map(() => ({ t: '', c: 100, w: [] }));
+    r.forEach(c => c.ws.forEach(w => {
+      const cx = (w.px0 + w.px1) / 2, j = sub[c.k].filter(b => cx > b).length;
+      row[idx[c.k] + j].w.push(w);
+    }));
+    return row.map(cl => {
+      cl.w.sort((a, b) => a.py - b.py);
+      let line = 0, last = null;
+      cl.w.forEach(w => { if (last !== null && w.py - last > mh * 0.6) line++; last = w.py; w.line = line; });
+      cl.w.sort((a, b) => a.line - b.line || a.px0 - b.px0);
+      return { t: cl.w.map(w => w.t).join(' '), c: cl.w.length ? Math.min(...cl.w.map(w => w.c)) : 100 };
+    });
+  });
+}
+
 // 격자 표: 칸을 하나씩 잘라서 따로 읽기 (옆 칸 글자가 섞이지 않음)
 async function ocrCells(p, label) {
-  const w = await getWorker($('#lang').value), ys = p.lines.hs, xs = p.lines.vs;
-  const ins = Math.round(3 * p.scale) + 3, rows = [];
-  const total = (ys.length - 1) * (xs.length - 1); let n = 0;
+  const w = await getWorker($('#lang').value), L = p.lines, s = p.scale;
+  const ins = Math.round(3 * s) + 3, cells = [], rows = [];
+  const total = L.bands.length; 
   const region = async (y0, y1) => {
     if (y1 - y0 < 40) return [];
     const k = cropCell(p.q, 0, y0, p.q.width, y1);
@@ -270,20 +329,22 @@ async function ocrCells(p, label) {
     const { data } = await w.recognize(k.c);
     return data.text.split('\n').map(t => t.trim()).filter(Boolean).map(t => [{ t, c: data.confidence }]);
   };
-  rows.push(...await region(0, ys[0] - ins));
-  for (let r = 0; r < ys.length - 1; r++) {
-    const row = [];
-    for (let c = 0; c < xs.length - 1; c++) {
-      $('#status').textContent = `${label}칸 읽는 중 ${++n}/${total}`;
-      const k = cropCell(p.q, xs[c] + ins, ys[r] + ins, xs[c + 1] - ins, ys[r + 1] - ins);
-      if (k.ink < 0.003) { row.push({ t: '', c: 100 }); continue; }
-      const { data } = await w.recognize(k.c);
-      const t = data.text.replace(/\s*\n\s*/g, ' ').trim();
-      row.push({ t, c: t ? data.confidence : 100 });
+  rows.push(...await region(0, L.hs[0] * s - ins));
+  for (let bi = 0; bi < L.bands.length; bi++) {
+    $('#status').textContent = `${label}줄 읽는 중 ${bi + 1}/${total}`;
+    const [ya, yb] = L.bands[bi], loc = localCols(L, bi), row = [];
+    for (let i = 0; i < loc.length - 1; i++) {
+      const [k, xa] = loc[i], xb = loc[i + 1][1];
+      const x0 = Math.round(xa * s) + ins, y0 = Math.round(ya * s) + ins;
+      const kk = cropCell(p.q, x0, y0, Math.round(xb * s) - ins, Math.round(yb * s) - ins);
+      if (kk.ink < 0.003) continue;
+      const { data } = await w.recognize(kk.c);
+      row.push({ k, ws: (data.words || []).filter(z => /[A-Za-z0-9가-힣]/.test(z.text)).map(z => ({ t: z.text, c: z.confidence, px0: x0 + z.bbox.x0 - 12, px1: x0 + z.bbox.x1 - 12, py: y0 + z.bbox.y0 - 12, h: z.bbox.y1 - z.bbox.y0 })) });
     }
-    rows.push(row);
+    cells.push(row);
   }
-  rows.push(...await region(ys[ys.length - 1] + ins, p.q.height));
+  rows.push(...buildRows(cells, L.vs.length - 1));
+  rows.push(...await region(L.hs[L.hs.length - 1] * s + ins, p.q.height));
   return rows;
 }
 
@@ -340,7 +401,7 @@ async function run(files) {
       const c = canvases[i], label = `${i + 1}/${canvases.length}페이지 · `;
       $('#status').textContent = label + '이미지 정리 중...';
       const q = prep(c, $('#clean').checked);
-      const p = { url: c.toDataURL('image/jpeg', 0.85), q, scale: q.width / c.width, lines: findLines(q), grid: [] };
+      const p = { url: c.toDataURL('image/jpeg', 0.85), q, scale: q.width / c.width, lines: findLines(c), grid: [] };
       pages.push(p);
       await fill(p, $('#mode').value, +$('#gap').value, label);
       if (canvases.length > 3) p.q = null;
