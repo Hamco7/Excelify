@@ -64,6 +64,13 @@ tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 .opt label{font-weight:700;font-size:14px;color:var(--navy)}
 .opt p{margin:0;font-size:12.5px;line-height:1.5;color:#52637a}
 .opt select,.opt button,.opt input[type=range]{width:100%}
+[hidden]{display:none!important}
+.tabbar{display:flex;gap:4px;padding:12px 24px 0;border-bottom:1px solid var(--line)}
+.tabbar button{border:0;border-bottom:3px solid transparent;border-radius:0;background:none;padding:8px 20px;font-weight:700;color:#52637a}
+.tabbar button.on{color:var(--navy);border-bottom-color:var(--acc)}
+#txt{width:100%;min-height:55vh;border:0;resize:vertical;background:transparent;color:var(--ink);font:15px/1.7 "Noto Sans KR",sans-serif}
+#txt:focus{outline:2px solid var(--acc)}
+#status2{padding:0 24px 8px;font-size:13px;color:#52637a;min-height:22px}
 </style>
 </head>
 <body>
@@ -71,6 +78,11 @@ tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 <h1>서류 표 엑셀 변환</h1>
 <p>이미지나 스캔 PDF를 올리면 표로 만들어 줍니다. 파일은 이 브라우저 안에서만 처리되고 외부로 전송되지 않습니다.</p>
 </header>
+<nav class="tabbar" role="tablist">
+<button role="tab" class="on" data-tab="table" aria-selected="true">표 → 엑셀</button>
+<button role="tab" data-tab="text" aria-selected="false">텍스트 추출</button>
+</nav>
+<div id="tabTable">
 <ol class="how"><li>파일을 넣어요. 끌어다 놓기, 선택, 또는 캡처 후 Ctrl+V</li><li>설정을 확인해요. 보통은 그대로 두면 돼요</li><li>표가 맞는지 보고, 틀린 칸은 직접 고쳐요</li><li>엑셀로 저장해요</li></ol>
 <div class="bar">
 <label class="drop" id="drop"><input type="file" id="file" accept="image/*,application/pdf" multiple>파일을 끌어다 놓거나 여기를 눌러 선택 (JPG, PNG, PDF) · 캡처한 이미지는 Ctrl+V로 바로 붙여넣기</label>
@@ -87,6 +99,24 @@ tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 <section class="pane" id="src"><div class="empty">원본 이미지가 여기에 표시됩니다.</div></section>
 <section class="pane" id="out"><div class="empty">인식된 표가 여기에 표시됩니다.</div></section>
 </main>
+</div>
+
+<div id="tabText" hidden>
+<ol class="how"><li>파일을 넣어요. 끌어다 놓기, 선택, 또는 캡처 후 Ctrl+V</li><li>언어를 확인해요</li><li>오른쪽에 나온 글자를 보고, 틀린 곳은 직접 고쳐요</li><li>복사하거나 .txt 파일로 저장해요</li></ol>
+<div class="bar">
+<label class="drop" id="drop2"><input type="file" id="file2" accept="image/*,application/pdf" multiple>파일을 끌어다 놓거나 여기를 눌러 선택 (JPG, PNG, PDF) · 캡처한 이미지는 Ctrl+V로 바로 붙여넣기</label>
+<div class="opts">
+<div class="opt"><label for="lang2">언어</label><select id="lang2"><option value="eng">영문</option><option value="eng+kor">영문+한글</option></select><p id="lang2Help"></p></div>
+<div class="opt"><label>복사</label><button id="copy" disabled>텍스트 복사</button><p>오른쪽 글자 전체를 복사해요. 메모장이나 문서에 붙여넣을 수 있어요.</p></div>
+<div class="opt"><label>저장</label><button class="primary" id="dlTxt" disabled>.txt로 저장</button><p>오른쪽 글자를 텍스트 파일로 내려받아요. 여러 페이지면 페이지 구분선이 들어가요.</p></div>
+</div>
+</div>
+<div id="status2"></div>
+<main>
+<section class="pane" id="src2"><div class="empty">원본 이미지가 여기에 표시됩니다.</div></section>
+<section class="pane" id="out2"><textarea id="txt" aria-label="추출된 텍스트" placeholder="추출된 글자가 여기에 나타나요. 직접 고칠 수 있어요."></textarea></section>
+</main>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
@@ -290,7 +320,7 @@ document.addEventListener('paste', e => {
   if (!fs.length) return;
   e.preventDefault();
   if (busy) { $('#status').textContent = '지금 처리 중이에요. 끝난 뒤에 다시 붙여넣어 주세요.'; return; }
-  run(fs.map((f, i) => new File([f], '캡처' + (fs.length > 1 ? i + 1 : '') + (f.type === 'application/pdf' ? '.pdf' : '.png'), { type: f.type })));
+  (tab === 'text' ? runText : run)(fs.map((f, i) => new File([f], '캡처' + (fs.length > 1 ? i + 1 : '') + (f.type === 'application/pdf' ? '.pdf' : '.png'), { type: f.type })));
 });
 const HELP = {
   lang: {
@@ -313,6 +343,69 @@ const drop = $('#drop');
 ['dragover', 'dragenter'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => { if (e.dataTransfer.files.length) run([...e.dataTransfer.files]); });
+
+// ---- 탭 전환 ----
+let tab = 'table', textBase = '텍스트';
+document.querySelectorAll('.tabbar button').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab;
+  $('#tabTable').hidden = tab !== 'table';
+  $('#tabText').hidden = tab !== 'text';
+  document.querySelectorAll('.tabbar button').forEach(x => {
+    const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-selected', on);
+  });
+});
+
+// ---- 텍스트 추출 ----
+function showHelp2() { $('#lang2Help').textContent = HELP.lang[$('#lang2').value]; }
+$('#lang2').onchange = showHelp2; showHelp2();
+
+async function runText(files) {
+  if (busy) return;
+  busy = true;
+  $('#copy').disabled = $('#dlTxt').disabled = true;
+  textBase = files[0].name.replace(/\.[^.]+$/, '');
+  try {
+    $('#status2').textContent = '파일을 읽는 중...';
+    let cs = [];
+    for (const f of files) cs = cs.concat(await toCanvases(f));
+    $('#src2').innerHTML = cs.map((c, i) => `<img src="${c.toDataURL('image/jpeg', 0.85)}" alt="원본 ${i + 1}페이지" style="margin-bottom:8px">`).join('');
+    let n = 0;
+    const worker = await Tesseract.createWorker($('#lang2').value.split('+'), 1, {
+      logger: m => { if (m.status) $('#status2').textContent = `${Math.min(n + 1, cs.length)}/${cs.length}페이지 · ${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; }
+    });
+    await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1', user_defined_dpi: '300' });
+    const out = [];
+    for (const c of cs) {
+      const { data } = await worker.recognize(prep(c));
+      out.push(data.text.trim()); n++;
+    }
+    await worker.terminate();
+    $('#txt').value = out.map((t, i) => cs.length > 1 ? `--- ${i + 1}페이지 ---\n${t}` : t).join('\n\n');
+    $('#status2').textContent = `완료: ${cs.length}페이지에서 글자를 추출했습니다. 틀린 곳은 직접 고칠 수 있어요.`;
+    $('#copy').disabled = $('#dlTxt').disabled = false;
+  } catch (err) {
+    $('#status2').textContent = '처리 중 문제가 생겼습니다: ' + err.message + ' (인터넷 연결과 파일 형식을 확인해 주세요.)';
+  } finally { busy = false; }
+}
+
+$('#copy').onclick = async () => {
+  const t = $('#txt');
+  try { await navigator.clipboard.writeText(t.value); }
+  catch (e) { t.select(); document.execCommand('copy'); }
+  $('#status2').textContent = '복사했어요. 원하는 곳에 Ctrl+V로 붙여넣으세요.';
+};
+$('#dlTxt').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + $('#txt').value], { type: 'text/plain;charset=utf-8' }));
+  a.download = textBase + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('#file2').onchange = e => { if (e.target.files.length) runText([...e.target.files]); };
+const drop2 = $('#drop2');
+['dragover', 'dragenter'].forEach(n => drop2.addEventListener(n, e => { e.preventDefault(); drop2.classList.add('over'); }));
+['dragleave', 'drop'].forEach(n => drop2.addEventListener(n, e => { e.preventDefault(); drop2.classList.remove('over'); }));
+drop2.addEventListener('drop', e => { if (e.dataTransfer.files.length) runText([...e.dataTransfer.files]); });
 </script>
 </body>
 </html>
