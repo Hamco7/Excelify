@@ -87,7 +87,7 @@ tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 <div class="bar">
 <label class="drop" id="drop"><input type="file" id="file" accept="image/*,application/pdf" multiple>파일을 끌어다 놓거나 여기를 눌러 선택 (JPG, PNG, PDF) · 캡처한 이미지는 Ctrl+V로 바로 붙여넣기</label>
 <div class="opts">
-<div class="opt"><label for="lang">언어</label><select id="lang"><option value="eng">영문</option><option value="eng+kor">영문+한글</option></select><p id="langHelp"></p></div>
+<div class="opt"><label for="lang">언어</label><select id="lang"><option value="eng">영문</option><option value="eng+kor">영문+한글</option><option value="chi_sim+eng">중국어(간체)+영문</option><option value="chi_tra+eng">중국어(번체)+영문</option></select><p id="langHelp"></p></div>
 <div class="opt"><label for="clean">배경 지우기</label><label style="font-weight:400"><input type="checkbox" id="clean" checked> 켜기</label><p>연한 워터마크 글씨와 빨강·노랑 표시를 지우고 검은 글자만 읽어요. 글자가 연하거나 흐린 서류라면 꺼 보세요.</p></div>
 <div class="opt"><label for="mode">표 방식</label><select id="mode"><option value="auto">자동</option><option value="grid">격자 선 기준</option><option value="free">글자 간격 기준</option></select><p id="modeHelp"></p></div>
 <div class="opt"><label for="gap">열 간격</label><input type="range" id="gap" min="0.4" max="3" step="0.1" value="1"><p>오른쪽으로 옮기면 가까운 칸끼리 합쳐지고, 왼쪽으로 옮기면 더 잘게 나뉘어요. 표 방식이 글자 간격 기준일 때만 효과가 있어요.</p></div>
@@ -107,7 +107,7 @@ tr:nth-child(n) td:not(.low):not(.x):hover{background:#e1ebf9}
 <div class="bar">
 <label class="drop" id="drop2"><input type="file" id="file2" accept="image/*,application/pdf" multiple>파일을 끌어다 놓거나 여기를 눌러 선택 (JPG, PNG, PDF) · 캡처한 이미지는 Ctrl+V로 바로 붙여넣기</label>
 <div class="opts">
-<div class="opt"><label for="lang2">언어</label><select id="lang2"><option value="eng">영문</option><option value="eng+kor">영문+한글</option></select><p id="lang2Help"></p></div>
+<div class="opt"><label for="lang2">언어</label><select id="lang2"><option value="eng">영문</option><option value="eng+kor">영문+한글</option><option value="chi_sim+eng">중국어(간체)+영문</option><option value="chi_tra+eng">중국어(번체)+영문</option></select><p id="lang2Help"></p></div>
 <div class="opt"><label for="clean2">배경 지우기</label><label style="font-weight:400"><input type="checkbox" id="clean2" checked> 켜기</label><p>연한 워터마크 글씨와 빨강·노랑 표시를 지우고 검은 글자만 읽어요. 글자가 연하거나 흐린 서류라면 꺼 보세요.</p></div>
 <div class="opt"><label for="junk">불확실한 줄</label><select id="junk"><option value="drop">지우기</option><option value="mark">⚠ 표시하기</option><option value="keep">그대로 두기</option></select><p id="junkHelp"></p></div>
 <div class="opt"><label>복사</label><button id="copy" disabled>텍스트 복사</button><p>오른쪽 글자 전체를 복사해요. 메모장이나 문서에 붙여넣을 수 있어요.</p></div>
@@ -177,7 +177,7 @@ function freeTable(words, k) {
       if (i < 0) i = cols.length - 1;
       cells[i].t.push(w.text); cells[i].c = Math.min(cells[i].c, w.confidence);
     });
-    return cells.map(c => ({ t: c.t.join(' '), c: c.c }));
+    return cells.map(c => ({ t: tidy(c.t.join(' ')), c: c.c }));
   });
 }
 
@@ -190,10 +190,12 @@ function prep(src, clean) {
   x.imageSmoothingQuality = 'high'; x.drawImage(src, 0, 0, c.width, c.height);
   const im = x.getImageData(0, 0, c.width, c.height), d = im.data;
   if (clean) {
-    // 가장 어두운 색 채널 기준: 빨강·노랑 표시와 연한 회색 워터마크는 흰색으로, 검은 글자는 또렷한 검정으로
+    // 밝기 기준: 연한 워터마크는 흰색으로, 빨강·노랑 표시도 지우고, 파랑·보라 등 다른 색 글자는 살려요
     for (let i = 0; i < d.length; i += 4) {
-      const g = Math.max(d[i], d[i + 1], d[i + 2]);
-      const v = g > 170 ? 255 : g < 90 ? 0 : (g - 90) * 255 / 80;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      const mark = (r > 200 && g < 110 && b < 110) || (r > 200 && g > 200 && b < 150);
+      const l = mark ? 255 : (r * 299 + g * 587 + b * 114) / 1000;
+      const v = l > 170 ? 255 : l < 90 ? 0 : (l - 90) * 255 / 80;
       d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
     }
   } else {
@@ -231,14 +233,27 @@ function findLines(src) {
   for (let y = 0; y < H; y++) if (longest(x => dark[y * W + x], W, 2) >= W * 0.4) hy.push(y);
   const hs = group(hy, 4), bands = [];
   for (let i = 0; i < hs.length - 1; i++) if (hs[i + 1] - hs[i] >= 20) bands.push([hs[i], hs[i + 1]]);
-  const sat = bands.map(() => new Uint8Array(W)), cnt = new Int32Array(W);
+  const nb = bands.length, sat = bands.map(() => new Uint8Array(W)), frac = bands.map(() => new Float32Array(W));
   bands.forEach(([a, b], bi) => {
     const y0 = Math.floor(a) + 3, n = Math.floor(b) - 3 - y0;
     if (n < 8) return;
-    for (let x = 0; x < W; x++) if (longest(i => dark[(y0 + i) * W + x], n, 2) >= 0.35 * (b - a)) { sat[bi][x] = 1; cnt[x]++; }
+    for (let x = 0; x < W; x++) {
+      const f = longest(i => dark[(y0 + i) * W + x], n, 2) / n;
+      frac[bi][x] = f; if (f >= 0.55) sat[bi][x] = 1;
+    }
   });
   const acc = [];
-  for (let x = 0; x < W; x++) if (bands.length && cnt[x] / bands.length >= 0.5) acc.push(x);
+  for (let x = 0; x < W && nb; x++) {
+    let st = 0, we = 0;
+    for (let bi = 0; bi < nb; bi++) { if (frac[bi][x] >= 0.75) st++; if (frac[bi][x] >= 0.55) we++; }
+    if (st / nb >= 0.5 || we / nb >= 0.8) acc.push(x);
+  }
+  if (hy.length) {  // 표의 왼쪽·오른쪽 끝도 경계로 (끝 선이 그려져 있지 않은 표 대비)
+    const xl = [], xr = [];
+    for (const y of hy) { let a = 0, b = W - 1; while (a < W && !dark[y * W + a]) a++; while (b > 0 && !dark[y * W + b]) b--; xl.push(a); xr.push(b); }
+    const med = arr => arr.slice().sort((p, q) => p - q)[arr.length >> 1];
+    acc.push(med(xl), med(xr)); acc.sort((p, q) => p - q);
+  }
   return { hs, vs: group(acc, 4), bands, sat };
 }
 // 한 줄(띠) 안에서 실제로 이어져 있는 세로선만 골라내기
@@ -252,6 +267,9 @@ function localCols(L, bi) {
   return out;
 }
 
+// 한자 사이에 끼어든 공백 지우기 (OCR이 글자마다 띄어 읽는 경우가 많아요)
+const tidy = t => t.replace(/([\u4e00-\u9fff\u3040-\u30ff：，。])\s+(?=[\u4e00-\u9fff\u3040-\u30ff：，。])/g, '$1');
+
 // ---- OCR 엔진(재사용) ----
 let W = null;
 async function getWorker(lang) {
@@ -262,7 +280,7 @@ async function getWorker(lang) {
   W = { lang, w };
   return w;
 }
-const okWord = w => w.text.trim() && w.confidence > 20 && /[A-Za-z0-9가-힣]/.test(w.text);
+const okWord = w => w.text.trim() && w.confidence > 20 && /[A-Za-z0-9가-힣\u4e00-\u9fff\u3040-\u30ff]/.test(w.text);
 
 function cropCell(q, x0, y0, x1, y1) {
   const w = Math.max(1, Math.round(x1 - x0)), h = Math.max(1, Math.round(y1 - y0));
@@ -270,9 +288,11 @@ function cropCell(q, x0, y0, x1, y1) {
   const g = c.getContext('2d', { willReadFrequently: true });
   g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
   g.drawImage(q, Math.round(x0), Math.round(y0), w, h, 12, 12, w, h);
-  const d = g.getImageData(12, 12, w, h).data; let ink = 0;
-  for (let i = 0; i < d.length; i += 4) if (d[i] < 128) ink++;
-  return { c, ink: ink / (w * h) };
+  const d = g.getImageData(12, 12, w, h).data, rowInk = new Uint8Array(h); let ink = 0;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) if (d[i] < 128) { ink++; rowInk[(p / w) | 0] = 1; }
+  let lines = 0, gap = 99;
+  for (let y = 0; y < h; y++) { if (rowInk[y]) { if (gap > 3) lines++; gap = 0; } else gap++; }
+  return { c, ink: ink / (w * h), lines };
 }
 
 // 칸 안의 글자들을 위치 기준으로 다시 열로 나누기 (선이 없는 열 경계 보완)
@@ -312,7 +332,7 @@ function buildRows(cells, nK) {
       let line = 0, last = null;
       cl.w.forEach(w => { if (last !== null && w.py - last > mh * 0.6) line++; last = w.py; w.line = line; });
       cl.w.sort((a, b) => a.line - b.line || a.px0 - b.px0);
-      return { t: cl.w.map(w => w.t).join(' '), c: cl.w.length ? Math.min(...cl.w.map(w => w.c)) : 100 };
+      return { t: tidy(cl.w.map(w => w.t).join(' ')), c: cl.w.length ? Math.min(...cl.w.map(w => w.c)) : 100 };
     });
   });
 }
@@ -320,14 +340,26 @@ function buildRows(cells, nK) {
 // 격자 표: 칸을 하나씩 잘라서 따로 읽기 (옆 칸 글자가 섞이지 않음)
 async function ocrCells(p, label) {
   const w = await getWorker($('#lang').value), L = p.lines, s = p.scale;
-  const ins = Math.round(3 * s) + 3, cells = [], rows = [];
+  const ins = Math.round(1.5 * s) + 3, cells = [], rows = [];
   const total = L.bands.length; 
   const region = async (y0, y1) => {
     if (y1 - y0 < 40) return [];
     const k = cropCell(p.q, 0, y0, p.q.width, y1);
     if (k.ink < 0.003) return [];
-    const { data } = await w.recognize(k.c);
-    return data.text.split('\n').map(t => t.trim()).filter(Boolean).map(t => [{ t, c: data.confidence }]);
+    await w.setParameters({ tessedit_pageseg_mode: '6' });
+    const { data } = await w.recognize(k.c), ls = data.lines || [];
+    const hh = ls.flatMap(l => (l.words || []).map(z => z.bbox.y1 - z.bbox.y0)).sort((a, b) => a - b), mh = hh[hh.length >> 1] || 20;
+    return ls.filter(l => l.confidence >= 45 && l.text.trim()).map(l => {
+      const out = []; let cur = null, px = 0;
+      for (const z of l.words || []) {
+        if (!/[A-Za-z0-9가-힣\u4e00-\u9fff\u3040-\u30ff]/.test(z.text)) continue;
+        if (cur && z.bbox.x0 - px > mh * 3) { out.push(cur); cur = null; }
+        if (!cur) cur = { t: [], c: 100 };
+        cur.t.push(z.text); cur.c = Math.min(cur.c, z.confidence); px = z.bbox.x1;
+      }
+      if (cur) out.push(cur);
+      return out.map(c => ({ t: tidy(c.t.join(' ')), c: c.c }));
+    }).filter(r => r.length);
   };
   rows.push(...await region(0, L.hs[0] * s - ins));
   for (let bi = 0; bi < L.bands.length; bi++) {
@@ -338,8 +370,9 @@ async function ocrCells(p, label) {
       const x0 = Math.round(xa * s) + ins, y0 = Math.round(ya * s) + ins;
       const kk = cropCell(p.q, x0, y0, Math.round(xb * s) - ins, Math.round(yb * s) - ins);
       if (kk.ink < 0.003) continue;
+      await w.setParameters({ tessedit_pageseg_mode: kk.lines <= 1 ? '7' : '6' });
       const { data } = await w.recognize(kk.c);
-      row.push({ k, ws: (data.words || []).filter(z => /[A-Za-z0-9가-힣]/.test(z.text)).map(z => ({ t: z.text, c: z.confidence, px0: x0 + z.bbox.x0 - 12, px1: x0 + z.bbox.x1 - 12, py: y0 + z.bbox.y0 - 12, h: z.bbox.y1 - z.bbox.y0 })) });
+      row.push({ k, ws: (data.words || []).filter(z => /[A-Za-z0-9가-힣\u4e00-\u9fff\u3040-\u30ff]/.test(z.text)).map(z => ({ t: z.text, c: z.confidence, px0: x0 + z.bbox.x0 - 12, px1: x0 + z.bbox.x1 - 12, py: y0 + z.bbox.y0 - 12, h: z.bbox.y1 - z.bbox.y0 })) });
     }
     cells.push(row);
   }
@@ -359,6 +392,7 @@ async function fill(p, mode, k, label) {
     else {
       $('#status').textContent = label + '글자 읽는 중...';
       const w = await getWorker($('#lang').value);
+      await w.setParameters({ tessedit_pageseg_mode: '6' });
       p.words = (await w.recognize(p.q)).data.words || [];
     }
   }
@@ -449,7 +483,9 @@ document.addEventListener('paste', e => {
 const HELP = {
   lang: {
     'eng': '영어 글자만 읽어요. 영어로 된 서류에 가장 정확하고 빨라요.',
-    'eng+kor': '영어와 한글을 함께 읽어요. 한글이 섞인 서류에 쓰세요. 처음엔 한글 데이터를 내려받느라 조금 더 걸려요.'
+    'eng+kor': '영어와 한글을 함께 읽어요. 한글이 섞인 서류에 쓰세요. 처음엔 한글 데이터를 내려받느라 조금 더 걸려요.',
+    'chi_sim+eng': '한자(중국 본토 간체자), 영어, 숫자가 섞인 화면이나 서류에 쓰세요. 처음엔 한자 데이터가 커서 내려받는 데 시간이 걸려요.',
+    'chi_tra+eng': '한자(대만·홍콩 번체자), 영어, 숫자가 섞인 서류에 쓰세요. 처음엔 한자 데이터가 커서 내려받는 데 시간이 걸려요.'
   },
   mode: {
     'auto': '표에 선이 있으면 선 안의 칸을 하나씩 따로 읽어서 정확해요(시간은 더 걸려요). 선이 없으면 글자 사이 간격으로 나눠요. 잘 모르겠다면 이걸 쓰세요.',
@@ -503,16 +539,17 @@ async function readSymbols(w, q, bb) {
 
 // 줄 단위로 훑어서, 구분선·얼룩이 글자 조각으로 읽힌 줄을 처리하기
 async function textFrom(data, mode, w, q) {
-  if (mode === 'keep' || !data.lines || !data.lines.length) return data.text.trim();
+  if (mode === 'keep' || !data.lines || !data.lines.length) return tidy(data.text.trim());
   const hs = data.lines.map(l => l.bbox.y1 - l.bbox.y0).sort((a, b) => a - b), med = hs[hs.length >> 1] || 1;
   const out = []; let prev = null;
   for (const l of data.lines) {
     const t = l.text.trim();
     if (!t) continue;
-    const toks = t.split(/\s+/), short = toks.filter(x => x.replace(/[^A-Za-z0-9가-힣]/g, '').length <= 2).length;
+    const toks = t.split(/\s+/), short = toks.filter(x => x.replace(/[^A-Za-z0-9가-힣\u4e00-\u9fff\u3040-\u30ff]/g, '').length <= 2).length;
     const h = l.bbox.y1 - l.bbox.y0;
-    const bad = l.confidence < 60 || (toks.length >= 4 && short / toks.length >= 0.7);
-    const flat = h < med * 0.65 && short / toks.length >= 0.5;
+    const cjk = /[\u4e00-\u9fff\u3040-\u30ff]/.test(t);
+    const bad = l.confidence < (cjk ? 45 : 60) || (!cjk && toks.length >= 4 && short / toks.length >= 0.7);
+    const flat = !cjk && h < med * 0.65 && short / toks.length >= 0.5;
     if (prev && l.bbox.y0 - prev.bbox.y1 > med * 0.9 && out[out.length - 1] !== '') out.push('');
     prev = l;
     if (bad || flat) {
@@ -520,7 +557,7 @@ async function textFrom(data, mode, w, q) {
       if (sym) out.push(sym);
       else if (mode === 'mark') out.push('⚠ ' + t);
       else if (out[out.length - 1] !== '') out.push('');
-    } else out.push(t);
+    } else out.push(tidy(t));
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
